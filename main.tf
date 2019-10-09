@@ -217,13 +217,3 @@ resource "aws_instance" "f5_bigip" {
     UK-SE = "${var.se-name}"
   }
 }
-
-# --- CREATE BIGIP TRAFFIC VLAN 
-resource "bigip_net_vlan" "vlan1" {
-    name = "/Common/traffic"
-    tag = 101
-    interfaces = {
-                vlanport = 1.1,
-                    tagged = false
-              }
-  }
