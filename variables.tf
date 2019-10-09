@@ -41,7 +41,7 @@ variable "vs_ports" {
 
 variable "project" {
   description = "project name to use for tags"
-  default     = "terra-aws-hmrc"
+  default     = "terra-aws-poc"
 }
 
 variable "se-name" {
