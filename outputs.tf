@@ -13,4 +13,3 @@ output "mgmt_public_dns" {
 output "password" {
   value = module.bigip.password
 }
-

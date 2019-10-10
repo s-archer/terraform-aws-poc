@@ -140,6 +140,7 @@ resource "aws_security_group" "bigip-sg-traffic" {
   }
 }
 
+
 module bigip {
   source = "f5devcentral/bigip/aws"
 
@@ -149,7 +150,7 @@ module bigip {
   ec2_key_name                     = var.ec2_key_name
   mgmt_subnet_security_group_ids   = flatten([aws_security_group.bigip-sg-mgmt.*.id])
   public_subnet_security_group_ids = flatten([aws_security_group.bigip-sg-traffic.*.id])
-  vpc_mgmt_subnet_ids              = ([aws_subnet.mgmt.*.id])[0]
-  vpc_public_subnet_ids            = ([aws_subnet.traffic.*.id])[0]
+  vpc_mgmt_subnet_ids              = flatten([aws_subnet.mgmt.*.id])
+  vpc_public_subnet_ids            = flatten([aws_subnet.traffic.*.id])
 
 }

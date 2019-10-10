@@ -3,7 +3,7 @@
 variable "f5_instance_count" {
   description = "Number of BIG-IPs to deploy"
   type        = number
-  default     = 2
+  default     = 1
 }
 
 variable "project" {
