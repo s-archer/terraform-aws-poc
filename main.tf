@@ -19,31 +19,33 @@ resource "aws_vpc" "terraform-vpc" {
 
 # --- CREATE MGMT SUBNET AZ-A
 resource "aws_subnet" "mgmt" {
-  cidr_block              = "${cidrsubnet(aws_vpc.terraform-vpc.cidr_block, 8, 0)}"
+  count                   = "${var.f5_instance_count}"
+  cidr_block              = "${cidrsubnet(aws_vpc.terraform-vpc.cidr_block, 8, count.index)}"
   vpc_id                  = "${aws_vpc.terraform-vpc.id}"
   availability_zone       = "${var.region-az-a}"
   map_public_ip_on_launch = "true"
 
   tags = {
-    Name = "${var.project}_subnet_mgmt_region-az-a"
+    Name = format("%s-subnet-mgmt-az-a-%d", var.project, count.index)
     UK-SE = "${var.se-name}"
   }
 }
 
 # --- CREATE TRAFFIC SUBNET AZ-A
 resource "aws_subnet" "traffic" {
-  cidr_block              = "${cidrsubnet(aws_vpc.terraform-vpc.cidr_block, 8, 1)}"
+  count                   = "${var.f5_instance_count}"
+  cidr_block              = "${cidrsubnet(aws_vpc.terraform-vpc.cidr_block, 8, count.index + var.f5_instance_count )}"
   vpc_id                  = "${aws_vpc.terraform-vpc.id}"
   availability_zone       = "${var.region-az-a}"
   map_public_ip_on_launch = "true"
 
   tags = {
-    Name = "${var.project}_subnet_traffic_region-az-a"
+    Name = format("%s-subnet-traffic-az-a-%d", var.project, count.index)
     UK-SE = "${var.se-name}"
   }
 }
 
-# --- CREATE INTERNET GATEWAY
+# --- CREATE IGW
 resource "aws_internet_gateway" "gw" {
   vpc_id = "${aws_vpc.terraform-vpc.id}"
 
@@ -70,17 +72,20 @@ resource "aws_route_table" "internet_rt" {
 
 # --- ASSOCIATE SUBNETS WITH INTERNET ROUTE TABLE
 resource "aws_route_table_association" "mgmt_rt" {
+  count          = "${var.f5_instance_count}"
   route_table_id = "${aws_route_table.internet_rt.id}"
-  subnet_id      = "${aws_subnet.mgmt.id}"
+  subnet_id      = "${aws_subnet.mgmt[count.index].id}"
 }
 resource "aws_route_table_association" "traffic_rt" {
+  count          = "${var.f5_instance_count}"
   route_table_id = "${aws_route_table.internet_rt.id}"
-  subnet_id      = "${aws_subnet.traffic.id}"
+  subnet_id      = "${aws_subnet.traffic[count.index].id}"
 }
 
 # --- CREATE SECUIRTY GROUP FOR MGMT INTERFACE
 resource "aws_security_group" "bigip-sg-mgmt" {
-  name        = "bigip-sg-mgmt"
+  count       = "${var.f5_instance_count}"
+  name        = format("%s-bigip-sg-mgmt-%d", var.project, count.index)
   description = "allow access to and from the bigip mgmt IP"
   vpc_id      = "${aws_vpc.terraform-vpc.id}"
 
@@ -108,7 +113,8 @@ resource "aws_security_group" "bigip-sg-mgmt" {
 
 # --- CREATE SECUIRTY GROUP FOR TRAFFIC INTERFACE
 resource "aws_security_group" "bigip-sg-traffic" {
-  name        = "bigip-sg-traffic"
+  count       = "${var.f5_instance_count}"
+  name        = format("%s-bigip-sg-traffic-%d", var.project, count.index)
   description = "allow access to and from the bigip traffic IP"
   vpc_id      = "${aws_vpc.terraform-vpc.id}"
 
@@ -134,86 +140,16 @@ resource "aws_security_group" "bigip-sg-traffic" {
   }
 }
 
-# --- GET F5 AMI ID
-data "aws_ami" "f5_ami" {
-  most_recent = true
-  owners      = ["679593333241"]
+module bigip {
+  source = "f5devcentral/bigip/aws"
 
-  filter {
-    name   = "name"
-    values = ["F5*BIGIP-14.1.2*PAYG-Best*10*"]
-  }
-}
+  prefix                           = "${var.project}-bigip-"
+  f5_instance_count                = var.f5_instance_count
+  f5_ami_search_name               = "F5*BIGIP-14.1.2*PAYG-Best*10*"
+  ec2_key_name                     = var.ec2_key_name
+  mgmt_subnet_security_group_ids   = flatten([aws_security_group.bigip-sg-mgmt.*.id])
+  public_subnet_security_group_ids = flatten([aws_security_group.bigip-sg-traffic.*.id])
+  vpc_mgmt_subnet_ids              = ([aws_subnet.mgmt.*.id])[0]
+  vpc_public_subnet_ids            = ([aws_subnet.traffic.*.id])[0]
 
-# --- CREATE RANDOM PASSWORD
-resource "random_string" "password" {
-  length           = 16
-  special          = true
-  override_special = "@"
-}
-
-# --- CREATE INTERFACE - BIG-IP MGMT
-resource "aws_network_interface" "mgmt" {
-  subnet_id       = aws_subnet.mgmt.id
-  security_groups = [aws_security_group.bigip-sg-mgmt.id]
-}
-
-# --- CREATE ELASTIC IP FOR BIG-IP MGMT
-resource "aws_eip" "mgmt" {
-  network_interface = aws_network_interface.mgmt.id
-  vpc               = true
-}
-
-# --- CREATE INTERFACE - BIG-IP TRAFFIC
-resource "aws_network_interface" "traffic" {
-  subnet_id       = aws_subnet.traffic.id
-  security_groups = [aws_security_group.bigip-sg-traffic.id]
-}
-
-# --- CREATE ELASTIC IP FOR BIG-IP TRAFFIC
-resource "aws_eip" "traffic" {
-  network_interface = aws_network_interface.traffic.id
-  vpc               = true
-}
-
-# --- DEPLOY BIG-IP USING DISCOVERED AMI
-resource "aws_instance" "f5_bigip" {
-  instance_type = var.ec2_instance_type
-  ami           = data.aws_ami.f5_ami.id
-  key_name      = var.ec2_key_name
-
-  root_block_device {
-    delete_on_termination = true
-  }
-
-  # -- ATTACH MGMT INTERFACE
-  network_interface {
-    network_interface_id = "${aws_network_interface.mgmt.id}"
-    device_index         = 0
-  }
-
-  # -- ATTACH TRAFFIC INTERFACE
-  network_interface {
-    network_interface_id = "${aws_network_interface.traffic.id}"
-    device_index         = 1
-  }
-
-  # -- BUILD 'USER DATA' FILE FROM TEMPLATE
-  user_data = templatefile(
-    "${path.module}/f5_onboard.tmpl",
-    {
-      DO_URL      = var.DO_URL,
-      AS3_URL     = var.AS3_URL,
-      libs_dir    = var.libs_dir,
-      onboard_log = var.onboard_log,
-      PWD         = random_string.password.result
-    }
-  )
-
-  depends_on = [aws_eip.mgmt]
-
-  tags = {
-    Name = "${var.project}_bigip_1"
-    UK-SE = "${var.se-name}"
-  }
 }
